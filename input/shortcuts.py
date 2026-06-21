@@ -45,7 +45,9 @@ def handle_shortcuts(io, state, on_open, on_copy=None):
 
 
 def handle_global_keys(io, state):
-    """ESC clears selection; cross-version + pygame fallback."""
+    """ESC clears selection; ? toggles tips; cross-version + pygame fallback."""
+    import pygame as _pg
+
     esc = False
     KeyEnum = getattr(imgui, "Key", None)
     if KeyEnum is not None and hasattr(KeyEnum, "Escape"):
@@ -62,7 +64,6 @@ def handle_global_keys(io, state):
                 pass
     if not esc:
         try:
-            import pygame as _pg
             esc = _pg.key.get_pressed()[_pg.K_ESCAPE]
         except Exception:
             pass
@@ -70,3 +71,17 @@ def handle_global_keys(io, state):
         state.selected_notes.clear()
         state.marquee_active = False
         state.playhead_beats = 0.0
+
+    # "?" key (Shift + /) toggles tips window
+    try:
+        if not getattr(io, "want_text_input", False):
+            keys = _pg.key.get_pressed()
+            mods = _pg.key.get_mods()
+            if keys[_pg.K_SLASH] and (mods & (_pg.KMOD_LSHIFT | _pg.KMOD_RSHIFT)):
+                if not getattr(state, "_question_held", False):
+                    state.show_tips = not state.show_tips
+                    state._question_held = True
+            else:
+                state._question_held = False
+    except Exception:
+        pass

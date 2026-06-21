@@ -47,7 +47,7 @@ def center_track_pitch_scroll(state: "AppState", td: TrackData) -> None:
     center_pitch = (td.pitch_min + td.pitch_max) * 0.5
     # y = row_top + 4 + pitch_scroll + (127 - center_pitch) * note_h  -> want row center
     row_center = state.track_height * 0.5
-    td.pitch_scroll_px = row_center - 4 - (127.0 - center_pitch) * state.note_height
+    td.pitch_scroll_px = row_center - 4 - (127.0 - center_pitch) * td.note_height
 
 
 def zoom_to_fit_time(state: "AppState") -> None:
@@ -62,33 +62,27 @@ def zoom_to_fit_time(state: "AppState") -> None:
 
 
 def zoom_to_fit_vertical(state: "AppState") -> None:
-    """Fit the largest pitch range across all tracks into a single track height."""
-    largest_range = 0
+    """Fit each track's pitch range into its row height."""
     for td in state.midi.tracks:
         if not td.notes:
             continue
-        prange = (td.pitch_max - td.pitch_min + 1)
-        largest_range = max(largest_range, prange)
-
-    if largest_range <= 0:
-        return
-
-    available = max(8, state.track_height - 8)  # small margins
-    new_note_h = max(2, int(available / largest_range))
-    state.note_height = int(clamp(new_note_h, 2, 48))
-
-    # Recenter each track range
-    for td in state.midi.tracks:
+        prange = td.pitch_max - td.pitch_min + 1
+        if prange > 0:
+            available = max(8, state.track_height - 8)
+            td.note_height = max(2, min(48, int(available / prange)))
         center_track_pitch_scroll(state, td)
 
 
 def zoom_reset(state: "AppState") -> None:
-    state.px_per_beat = 60.0
-    state.track_height = 120
-    state.note_height = 8
+    state.px_per_beat = 30.0
+    state.track_height = 800
+    state.note_height = 10
+    state.track_height_auto = True
     state.scroll_x_px = 0.0
     state.scroll_y_px = 0.0
+    state.focused_track = None
     for td in state.midi.tracks:
+        td.note_height = 10
         td.pitch_scroll_px = 0.0
 
 
@@ -107,15 +101,23 @@ def zoom_time_center(state: "AppState", factor: float) -> None:
 class AppState:
     should_quit: bool = False
     show_demo: bool = False
-    show_zoom_settings: bool = True
-    show_info_pane: bool = True
+    show_tips: bool = False
+    show_playback: bool = True
+    show_tracker_settings: bool = True
 
     # Drawing / layout
-    px_per_beat: float = 60.0
-    track_height: int = 120
-    note_height: int = 8
+    px_per_beat: float = 30.0
+    track_height: int = 800
+    track_height_auto: bool = True
+    note_height: int = 10
     ruler_h: int = 28
-    track_header_w: int = 160
+    track_header_w: int = 200
+
+    # Layout splitters
+    split_x: float = 0.667
+    split_y: float = 0.25
+    split_x_dragging: bool = False
+    split_y_dragging: bool = False
 
     # Global scroll (canvas space, pixels)
     scroll_x_px: float = 0.0
@@ -161,14 +163,25 @@ class AppState:
     play_end_us = 0.0
     play_events = []
     play_next_index = 0
+    active_pitches = set()
 
     master_gain = 0.5
+    tracking_enabled = True
 
-    show_tracker_settings = True
+    tracker_view_line: int = 0
+
     tracker_cfg = FurnaceConfig()
 
     pending_export_popup: str | None = None
-    
+
+    show_settings: bool = False
+    ui_scale: float = 1.5
+    request_font_rebuild: bool = False
+
+    focused_track: int | None = None
+
+    theme = None  # set at startup from ui.theme.load_default_theme()
+
 __all__ = [
     "AppState",
     "clamp",

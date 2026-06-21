@@ -1,7 +1,14 @@
+#!/bin/python
+
+import os
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
+
 import sys
 import math
+import warnings
+warnings.filterwarnings("ignore", message=".*avx2.*", category=RuntimeWarning)
 import pygame
-from pygame.locals import DOUBLEBUF, OPENGL, RESIZABLE, VIDEORESIZE, QUIT
+from pygame.locals import DOUBLEBUF, OPENGL, RESIZABLE, VIDEORESIZE, QUIT, MOUSEWHEEL
 import OpenGL.GL as gl
 
 import imgui
@@ -13,18 +20,21 @@ from typing import List, Tuple, Optional
 from input.shortcuts import handle_shortcuts, handle_global_keys
 from input.nav import handle_navigation_keys
 from ui.menu import draw_menu_bar
-from ui.panels import draw_zoom_settings_window, draw_info_window
-from ui.timeline import draw_timeline_canvas
+from ui.layout import draw_tiled_layout
+from ui.panels import draw_tips_window
+from ui.settings import draw_settings_window
+from ui.icons import load_fonts
+from ui.theme import load_default_theme
 from audio.player import update_playback
 from input.play_keys import handle_play_keys
-from ui.tracker_panel import draw_tracker_settings_window
-from tracker.export import copy_selection_to_clipboard
+from tracker.export import copy_selection_to_clipboard, export_selection_to_file
 
 from version import __version__
 
 
 # Persist ImGui layout here
 UI_INI_PATH = "imgui.ini"
+UI_SCALE = 1.5
 
 # ---- bring in our split modules ----
 from app.state import (
@@ -35,21 +45,76 @@ from app.state import (
 from app.midi_doc import MidiDoc, Note, TrackData
 
 
-# ---- simple file dialog for Open ----
+# ---- file dialogs (zenity -> tkinter fallback) ----
+def _zenity_path():
+    import shutil
+    return shutil.which("zenity")
+
 def ask_open_midi() -> Optional[str]:
+    zenity = _zenity_path()
+    if zenity:
+        try:
+            import subprocess
+            result = subprocess.run(
+                [zenity, "--file-selection",
+                 "--title=Open MIDI file",
+                 "--file-filter=MIDI files | *.mid *.midi",
+                 "--file-filter=All files | *"],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+            return None
+        except Exception:
+            pass
     try:
         import tkinter as tk
         from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
+        root = tk.Tk(); root.withdraw()
         path = filedialog.askopenfilename(
             title="Open MIDI file",
-            filetypes=[("MIDI files", "*.mid *.midi"), ("All files", "*.*")]
+            filetypes=[("MIDI files", "*.mid *.midi"), ("All files", "*.*")],
         )
         root.destroy()
         return path if path else None
     except Exception:
         return None
+
+
+def do_export_file(state: AppState):
+    zenity = _zenity_path()
+    path = None
+    if zenity:
+        try:
+            import subprocess
+            result = subprocess.run(
+                [zenity, "--file-selection", "--save", "--confirm-overwrite",
+                 "--title=Export Furnace Pattern Data",
+                 "--file-filter=Text files | *.txt",
+                 "--file-filter=All files | *"],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                path = result.stdout.strip()
+        except Exception:
+            pass
+    if not path:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk(); root.withdraw()
+            path = filedialog.asksaveasfilename(
+                title="Export Furnace Pattern Data",
+                defaultextension=".txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            )
+            root.destroy()
+        except Exception:
+            pass
+    if not path:
+        return
+    ok, msg = export_selection_to_file(state, state.tracker_cfg, path)
+    print(f"[Export] {msg}")
 
 
 def do_open_file(state: AppState):
@@ -58,8 +123,8 @@ def do_open_file(state: AppState):
         return
     try:
         state.midi.load(path)
-        # After load, try to fit both axes initially
         state.request_fit_all = True
+        state.track_height_auto = True
     except Exception as e:
         print(f"Failed to open MIDI: {e}")
 
@@ -68,7 +133,7 @@ def do_open_file(state: AppState):
 def main():
     # --- Pygame / GL init ---
     pygame.init()
-    size = (1280, 720)
+    size = (1920, 1080)
     flags = DOUBLEBUF | OPENGL | RESIZABLE
 
     def try_make_gl(size, flags):
@@ -135,18 +200,14 @@ def main():
     pygame.display.set_caption("MIDI Piano Roll (pyimgui)")
     gl.glViewport(0, 0, *pygame.display.get_surface().get_size())
 
-    # (optional) Log GL info to help diagnose remote users
-    try:
-        ver = gl.glGetString(gl.GL_VERSION)
-        rend = gl.glGetString(gl.GL_RENDERER)
-        print(f"[GL] Context: {mode} | Version: {ver!r} | Renderer: {rend!r}")
-    except Exception:
-        pass
 
 
     # --- ImGui init ---
     imgui.create_context()
     io = imgui.get_io()
+
+    load_fonts(io, UI_SCALE)
+
     io.config_flags |= imgui.CONFIG_NAV_ENABLE_KEYBOARD
     # Only allow moving windows from the title bar (not the content area)
     try:
@@ -182,6 +243,11 @@ def main():
     clock = pygame.time.Clock()
     state = AppState()
     state.window_size = size
+    state.ui_scale = UI_SCALE
+
+    # Load and apply Furnace-style theme
+    state.theme = load_default_theme()
+    state.theme.apply()
 
     try:
         while not state.should_quit:
@@ -193,6 +259,8 @@ def main():
                     pygame.display.set_mode(size, flags)
                     gl.glViewport(0, 0, *size)
                     state.window_size = size
+                elif event.type == MOUSEWHEEL:
+                    io.mouse_wheel = event.y
                 renderer.process_event(event)
 
             renderer.process_inputs()
@@ -206,14 +274,14 @@ def main():
                 on_open=lambda: do_open_file(state),
                 ini_path=UI_INI_PATH,
                 on_copy=lambda: copy_selection_to_clipboard(state, state.tracker_cfg),
+                on_export_file=lambda: do_export_file(state),
             )
-            draw_zoom_settings_window(state)
-            draw_info_window(state)
-            draw_tracker_settings_window(state)
+            draw_tiled_layout(state)
+            draw_tips_window(state)
+            draw_settings_window(state)
 
             # Update play transport and keys
             update_playback(state)
-            draw_timeline_canvas(state)  # playhead draws inside this fn
             handle_navigation_keys(io, state)
             handle_play_keys(io, state)  # SPACE to toggle play
             handle_global_keys(io, state)
@@ -224,13 +292,22 @@ def main():
                 imgui.show_demo_window()
 
             # Render
-            gl.glClearColor(0.10, 0.10, 0.10, 1.0)
+            gl.glClearColor(*state.theme.clear_color)
             gl.glClear(gl.GL_COLOR_BUFFER_BIT)
 
             imgui.render()
             renderer.render(imgui.get_draw_data())
             pygame.display.flip()
             clock.tick(120)
+
+            # Rebuild fonts when UI scale changes
+            if state.request_font_rebuild:
+                state.request_font_rebuild = False
+                load_fonts(io, state.ui_scale)
+                try:
+                    renderer.refresh_font_texture()
+                except Exception:
+                    pass
     finally:
         try:
             renderer.shutdown()
@@ -248,5 +325,19 @@ def main():
             pass
 
 
+def _check_deps():
+    missing = []
+    for mod in ("pygame", "OpenGL", "OpenGL.GL", "imgui", "imgui.integrations.pygame", "mido"):
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(mod)
+    if missing:
+        print(f"[Error] Missing packages: {', '.join(missing)}")
+        print("Install with: pip install", " ".join(m.split(".")[0].lower() for m in missing))
+        sys.exit(1)
+
+
 if __name__ == "__main__":
+    _check_deps()
     main()

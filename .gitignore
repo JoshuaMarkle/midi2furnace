@@ -24,3 +24,6 @@ sample\ MIDI\ files/
 .DS_Store
 Thumbs.db
 *.log
+
+# Misc
+CLAUDE.md

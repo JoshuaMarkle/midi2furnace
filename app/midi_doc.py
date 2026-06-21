@@ -42,6 +42,10 @@ class TrackData:
         # Pitch bounds for the track (inclusive)
         self.pitch_min: int = 127
         self.pitch_max: int = 0
+        self.note_height: int = 10
+        self.muted: bool = False
+        self.starred: bool = False
+        self.instrument: str = "Square"
 
 
 class MidiDoc:

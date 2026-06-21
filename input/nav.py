@@ -57,7 +57,8 @@ def handle_navigation_keys(io, state):
             state._track_h_float *= v_in
         if minus_pressed:
             state._track_h_float *= v_out
-        state._track_h_float = float(clamp(state._track_h_float, 40.0, 400.0))
+        state._track_h_float = float(clamp(state._track_h_float, 40.0, 2000.0))
+        state.track_height_auto = False
         new_th = int(round(state._track_h_float))
         if new_th != state.track_height and (plus_pressed or minus_pressed):
             state.track_height = new_th

@@ -225,17 +225,19 @@ def copy_selection_to_clipboard(state, cfg: FurnaceConfig) -> Tuple[bool, str]:
         return False, text_or_error
 
     text = text_or_error
-    # Try imgui first (often available on all platforms)
+    # xclip is reliable on X11 (Arch/i3/X11 setup)
     try:
-        import imgui
-        try:
-            imgui.set_clipboard_text(text)
+        import subprocess
+        proc = subprocess.run(
+            ["xclip", "-selection", "clipboard"],
+            input=text.encode("utf-8"),
+            timeout=5,
+        )
+        if proc.returncode == 0:
             return True, "Copied"
-        except Exception:
-            pass
     except Exception:
         pass
-    # Fallback to pyperclip
+    # pyperclip (uses xclip/xsel/wl-clipboard under the hood)
     try:
         import pyperclip
         pyperclip.copy(text)
@@ -249,4 +251,20 @@ def copy_selection_to_clipboard(state, cfg: FurnaceConfig) -> Tuple[bool, str]:
         r.clipboard_clear(); r.clipboard_append(text); r.update(); r.destroy()
         return True, "Copied"
     except Exception:
-        return False, "Failed to access any clipboard backend"
+        pass
+    return False, "Failed to access any clipboard backend"
+
+
+def export_selection_to_file(state, cfg: FurnaceConfig, path: str) -> Tuple[bool, str]:
+    """(ok, message). Writes the same payload copy_selection_to_clipboard would copy, to a file."""
+    ok, text_or_error = build_furnace_clipboard_text(state, cfg)
+    if not ok:
+        return False, text_or_error
+
+    text = text_or_error
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+        return True, f"Exported to {path}"
+    except Exception as e:
+        return False, f"Failed to write file: {e!r}"

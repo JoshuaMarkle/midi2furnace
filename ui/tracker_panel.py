@@ -1,13 +1,16 @@
 # ui/tracker_panel.py
 import imgui
 from tracker.types import FurnaceConfig
-from tracker.export import copy_selection_to_clipboard
+from tracker.export import copy_selection_to_clipboard, build_furnace_clipboard_text
+from ui.icons import ICON_COPY, ICON_EYE, ICON_CHECK
 
-def draw_tracker_settings_window(state):
-    if not getattr(state, "show_tracker_settings", False):
-        return
-    imgui.begin("Furnace Export Settings")
+def draw_tracker_settings_content(state):
     cfg: FurnaceConfig = state.tracker_cfg
+    t = state.theme
+
+    imgui.text_colored("- Export settings -", 1.0, 1.0, 1.0, 1.0)
+    imgui.spacing()
+    imgui.separator()
 
     changed, lpq = imgui.slider_int("Lines per 1/4 note", cfg.lines_per_quarter, 1, 32)
     if changed: cfg.lines_per_quarter = lpq
@@ -129,7 +132,6 @@ def draw_tracker_settings_window(state):
 
     _pushed = False
     if disabled:
-        # Dim the widget to look disabled
         try:
             style = imgui.get_style()
             imgui.push_style_var(imgui.STYLE_ALPHA, style.alpha * 0.5)
@@ -145,18 +147,6 @@ def draw_tracker_settings_window(state):
         imgui.pop_style_var()
 
     imgui.separator()
-    # Copy + status (uses the new (ok, msg) return)
-    if imgui.button("Copy selection to Furnace (Ctrl+C)"):
-        ok, msg = copy_selection_to_clipboard(state, cfg)
-        if ok:
-            imgui.same_line()
-            imgui.text_colored("Copied!", 0.6, 1.0, 0.6, 1.0)
-        else:
-            state.pending_export_popup = msg or "Export failed."
-            try:
-                imgui.open_popup("Export Warning")
-            except Exception:
-                pass
 
     # Modal for warnings/errors (e.g., spillover with multi-track selection)
     if getattr(state, "pending_export_popup", None):
@@ -175,25 +165,22 @@ def draw_tracker_settings_window(state):
             state.pending_export_popup = None
         imgui.end_popup()
 
-    # --- Lightweight live preview ---
-    imgui.separator()
-    imgui.text("Preview")
 
+def draw_furnace_preview(state):
+    """Furnace clipboard preview, rendered in mono font."""
     from tracker.export import build_furnace_clipboard_text
+    from ui.icons import font_mono
+
+    cfg = state.tracker_cfg
     ok, text_or_err = build_furnace_clipboard_text(state, cfg)
 
-    # Fill to right + bottom; add horizontal scrollbar
-    min_h = 240.0
-    avail_w, avail_h = imgui.get_content_region_available()
-    child_w = 0.0                     # 0 = take full remaining width
-    child_h = max(min_h, float(avail_h))
-
-    # Some pyimgui builds might not have the constant; fall back to 0.
     HSCROLL = getattr(imgui, "WINDOW_HORIZONTAL_SCROLLING_BAR", 0)
+    avail_w, avail_h = imgui.get_content_region_available()
+    imgui.begin_child("##furnace_preview", 0.0, max(100.0, float(avail_h)), True, HSCROLL)
 
-    imgui.begin_child("##furnace_preview", child_w, child_h, True, HSCROLL)
+    if font_mono is not None:
+        imgui.push_font(font_mono)
 
-    # Important: use unwrapped text so long lines can scroll horizontally
     if ok:
         try:
             imgui.text_unformatted(text_or_err)
@@ -205,6 +192,7 @@ def draw_tracker_settings_window(state):
         imgui.separator()
         imgui.text_wrapped(text_or_err)
 
-    imgui.end_child()
+    if font_mono is not None:
+        imgui.pop_font()
 
-    imgui.end()
+    imgui.end_child()

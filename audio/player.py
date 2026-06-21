@@ -34,13 +34,14 @@ def build_schedule(state, start_b: float, end_b: float):
         if eb <= start_b or sb >= end_b:
             continue
         sb_clip = max(sb, start_b)
-        eb_clip = max(sb_clip + 1e-4, min(eb, end_b))  # avoid zero-length
+        eb_clip = max(sb_clip + 1e-4, min(eb, end_b))
         ev.append({
             "start_beats": sb_clip,
             "end_beats": eb_clip,
             "start_us": b2us(sb_clip),
             "end_us": b2us(eb_clip),
             "pitch": n.pitch,
+            "track_idx": ti,
         })
     ev.sort(key=lambda e: e["start_us"])
     state.play_events = ev
@@ -69,6 +70,7 @@ def stop_playback(state, *, restore_cursor=True):
     if not state.playing:
         return
     state.playing = False
+    state.active_pitches = set()
     try:
         pygame.mixer.stop()
     except Exception:
@@ -85,19 +87,31 @@ def update_playback(state):
     cur_beats = state.midi.us_to_beat(cur_us)
     state.playhead_beats = cur_beats
 
-    # Fire due notes (tempo-accurate)
     idx = state.play_next_index
     ev = state.play_events
+    any_starred = any(td.starred for td in state.midi.tracks)
     while idx < len(ev) and ev[idx]["start_us"] <= cur_us:
-        p = ev[idx]["pitch"]
-        dur_ms = max(30, int((ev[idx]["end_us"] - ev[idx]["start_us"]) / 1000.0))
+        e = ev[idx]
+        idx += 1
+        td_ev = state.midi.tracks[e["track_idx"]]
+        if td_ev.muted or (any_starred and not td_ev.starred):
+            continue
+        p = e["pitch"]
+        dur_ms = max(30, int((e["end_us"] - e["start_us"]) / 1000.0))
         freq = 440.0 * (2.0 ** ((p - 69) / 12.0))
-        gain = getattr(state, "master_gain", 0.5)  # 0.5 = half, 0.25 = quarter
+        gain = getattr(state, "master_gain", 0.5)
         ch = tone(freq, dur_ms).play()
         if ch:
             ch.set_volume(gain)
-        idx += 1
     state.play_next_index = idx
+
+    active = set()
+    for e in ev:
+        if e["start_beats"] <= cur_beats < e["end_beats"]:
+            td_ev = state.midi.tracks[e["track_idx"]]
+            if not td_ev.muted and not (any_starred and not td_ev.starred):
+                active.add(e["pitch"])
+    state.active_pitches = active
 
     if cur_us >= state.play_end_us or (idx >= len(ev) and not ev):
         stop_playback(state)
