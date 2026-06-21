@@ -41,13 +41,8 @@ def compute_track_pitch_bounds(state: "AppState") -> tuple[bool, int, int]:
 
 
 def center_track_pitch_scroll(state: "AppState", td: TrackData) -> None:
-    """Center the track's pitch range in its row using current note_height."""
-    if td.pitch_min > td.pitch_max:
-        return
-    center_pitch = (td.pitch_min + td.pitch_max) * 0.5
-    # y = row_top + 4 + pitch_scroll + (127 - center_pitch) * note_h  -> want row center
-    row_center = state.track_height * 0.5
-    td.pitch_scroll_px = row_center - 4 - (127.0 - center_pitch) * td.note_height
+    """Legacy stub — no longer used in unified piano roll."""
+    pass
 
 
 def zoom_to_fit_time(state: "AppState") -> None:
@@ -62,28 +57,30 @@ def zoom_to_fit_time(state: "AppState") -> None:
 
 
 def zoom_to_fit_vertical(state: "AppState") -> None:
-    """Fit each track's pitch range into its row height."""
+    """Fit global pitch range into the visible piano roll height."""
+    gmin, gmax = 127, 0
     for td in state.midi.tracks:
-        if not td.notes:
-            continue
-        prange = td.pitch_max - td.pitch_min + 1
-        if prange > 0:
-            available = max(8, state.track_height - 8)
-            td.note_height = max(2, min(48, int(available / prange)))
-        center_track_pitch_scroll(state, td)
+        if td.notes:
+            gmin = min(gmin, td.pitch_min)
+            gmax = max(gmax, td.pitch_max)
+    if gmin > gmax:
+        return
+    visible_h = max(1.0, state.last_canvas_height - state.ruler_h - 18)
+    prange = gmax - gmin + 3
+    state.note_height = max(2, min(48, int(visible_h / prange)))
+    content_h = 128 * state.note_height
+    scroll_y_max = max(0.0, content_h - visible_h)
+    center_pitch = (gmin + gmax) / 2.0
+    center_y = (127 - center_pitch) * state.note_height
+    state.scroll_y_px = clamp(center_y - visible_h / 2, 0, scroll_y_max)
 
 
 def zoom_reset(state: "AppState") -> None:
     state.px_per_beat = 30.0
-    state.track_height = 800
     state.note_height = 10
-    state.track_height_auto = True
     state.scroll_x_px = 0.0
     state.scroll_y_px = 0.0
     state.focused_track = None
-    for td in state.midi.tracks:
-        td.note_height = 10
-        td.pitch_scroll_px = 0.0
 
 
 def zoom_time_center(state: "AppState", factor: float) -> None:
@@ -134,10 +131,13 @@ class AppState:
     marquee_start: Tuple[float, float] = (0.0, 0.0)
     marquee_end: Tuple[float, float] = (0.0, 0.0)
 
-    # Custom vertical scrollbar drag state
+    # Custom scrollbar drag state
     vsb_dragging: bool = False
     vsb_anchor_mouse_y: float = 0.0
     vsb_anchor_scroll_y: float = 0.0
+    hsb_dragging: bool = False
+    hsb_anchor_mouse_x: float = 0.0
+    hsb_anchor_scroll_x: float = 0.0
 
     # MIDI
     midi: MidiDoc = field(default_factory=MidiDoc)
@@ -166,6 +166,7 @@ class AppState:
     active_pitches = set()
 
     master_gain = 0.5
+    master_muted = False
     tracking_enabled = True
 
     tracker_view_line: int = 0
@@ -175,7 +176,7 @@ class AppState:
     pending_export_popup: str | None = None
 
     show_settings: bool = False
-    ui_scale: float = 1.5
+    ui_scale: float = 1.0
     request_font_rebuild: bool = False
 
     focused_track: int | None = None

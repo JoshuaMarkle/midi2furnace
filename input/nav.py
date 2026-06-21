@@ -1,9 +1,8 @@
 import math
-from app.state import clamp, center_track_pitch_scroll, zoom_time_center
+from app.state import clamp, zoom_time_center
 
 def handle_navigation_keys(io, state):
-    """Arrows pan; +/- horizontal zoom; Shift+/- vertical zoom; PgUp/PgDn note height."""
-    # only bail while typing text
+    """Arrows pan; +/- horizontal zoom; Shift+/- note height; PgUp/PgDn note height."""
     try:
         if getattr(io, "want_text_input", False):
             return
@@ -16,10 +15,9 @@ def handle_navigation_keys(io, state):
 
     dt = float(getattr(io, "delta_time", 1/60.0) or 1/60.0)
 
-    # Pan speed (px/sec)
     view_w = max(1.0, state.last_canvas_width - state.track_header_w - 18.0)
     pan_speed_x = max(60.0, view_w * 0.5)
-    pan_speed_y = max(60.0, state.track_height * 1.5)
+    pan_speed_y = max(60.0, state.note_height * 20.0)
 
     dx = pan_speed_x * dt
     dy = pan_speed_y * dt
@@ -33,44 +31,39 @@ def handle_navigation_keys(io, state):
     if keys[_pg.K_DOWN]:
         state.scroll_y_px = state.scroll_y_px + dy
 
-    # Zoom rates (multiplier/second)
-    hz_rate   = 10.0
-    vtrk_rate = 5.0
-    hz_in  = hz_rate ** dt
+    hz_rate = 10.0
+    nh_rate = 5.0
+    hz_in = hz_rate ** dt
     hz_out = (1.0 / hz_rate) ** dt
-    v_in   = vtrk_rate ** dt
-    v_out  = (1.0 / vtrk_rate) ** dt
+    nh_in = nh_rate ** dt
+    nh_out = (1.0 / nh_rate) ** dt
 
-    K_KP_PLUS  = getattr(_pg, "K_KP_PLUS", None)
+    K_KP_PLUS = getattr(_pg, "K_KP_PLUS", None)
     K_KP_MINUS = getattr(_pg, "K_KP_MINUS", None)
-    K_PLUS     = getattr(_pg, "K_PLUS", None)
+    K_PLUS = getattr(_pg, "K_PLUS", None)
     shift_down = bool(mods & (_pg.KMOD_LSHIFT | _pg.KMOD_RSHIFT))
 
-    plus_pressed  = keys[_pg.K_EQUALS] or (K_PLUS is not None and keys[K_PLUS]) or (K_KP_PLUS  is not None and keys[K_KP_PLUS])
-    minus_pressed = keys[_pg.K_MINUS]  or (K_KP_MINUS is not None and keys[K_KP_MINUS])
+    plus_pressed = keys[_pg.K_EQUALS] or (K_PLUS is not None and keys[K_PLUS]) or (K_KP_PLUS is not None and keys[K_KP_PLUS])
+    minus_pressed = keys[_pg.K_MINUS] or (K_KP_MINUS is not None and keys[K_KP_MINUS])
 
     if shift_down:
-        # vertical track zoom with float accumulator
-        if not hasattr(state, "_track_h_float"):
-            state._track_h_float = float(state.track_height)
+        if not hasattr(state, "_note_h_float"):
+            state._note_h_float = float(state.note_height)
         if plus_pressed:
-            state._track_h_float *= v_in
+            state._note_h_float *= nh_in
         if minus_pressed:
-            state._track_h_float *= v_out
-        state._track_h_float = float(clamp(state._track_h_float, 40.0, 2000.0))
-        state.track_height_auto = False
-        new_th = int(round(state._track_h_float))
-        if new_th != state.track_height and (plus_pressed or minus_pressed):
-            state.track_height = new_th
-            for td in state.midi.tracks:
-                center_track_pitch_scroll(state, td)
+            state._note_h_float *= nh_out
+        state._note_h_float = float(clamp(state._note_h_float, 2.0, 48.0))
+        new_nh = int(round(state._note_h_float))
+        if new_nh != state.note_height and (plus_pressed or minus_pressed):
+            state.note_height = new_nh
     else:
         if plus_pressed:
             zoom_time_center(state, hz_in)
         if minus_pressed:
             zoom_time_center(state, hz_out)
 
-    # Note height: additive px/sec, smooth
+    # Note height via PageUp/PageDown
     if not hasattr(state, "_note_h_float"):
         state._note_h_float = float(state.note_height)
     note_step_per_sec = 8.0
@@ -86,5 +79,3 @@ def handle_navigation_keys(io, state):
     new_int = int(round(state._note_h_float))
     if changed_nh and new_int != state.note_height:
         state.note_height = new_int
-        for td in state.midi.tracks:
-            center_track_pitch_scroll(state, td)

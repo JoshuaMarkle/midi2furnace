@@ -1,7 +1,7 @@
 import math
 import imgui
 from ui.icons import font_mono
-from tracker.export import NOTE_NAMES
+from tracker.export import NOTE_NAMES, build_track_grids, _resolve_track_settings
 
 _COL_DIVIDER = None
 _COL_ROW_NUM = None
@@ -32,7 +32,7 @@ def _init_colors():
     _COL_ROW_ALT = imgui.get_color_u32_rgba(1, 1, 1, 0.025)
     _COL_HEADER_BG = imgui.get_color_u32_rgba(0.04, 0.04, 0.04, 1.0)
     _COL_HEADER_TEXT = imgui.get_color_u32_rgba(1, 1, 1, 0.9)
-    _COL_PLAYHEAD = imgui.get_color_u32_rgba(1.0, 0.4, 0.2, 0.35)
+    _COL_PLAYHEAD = imgui.get_color_u32_rgba(1, 1, 1, 0.10)
 
 
 def _midi_note_str(pitch, transpose_octaves=0):
@@ -41,55 +41,7 @@ def _midi_note_str(pitch, transpose_octaves=0):
     letter = name[0]
     acc = "#" if len(name) > 1 and name[1] == "#" else "-"
     octave = n // 12 - 1
-    return f"{letter}{acc}{octave}"
-
-
-def _build_tracker_grid(state):
-    cfg = state.tracker_cfg
-    tpq = state.midi.ticks_per_beat or 480
-    lpq = max(1, cfg.lines_per_quarter)
-
-    if not state.midi.tracks:
-        return [], 0, 0, []
-
-    total_lines = max(1, int(math.ceil(state.midi.total_beats * lpq)))
-    num_tracks = len(state.midi.tracks)
-
-    grid = [[None] * num_tracks for _ in range(total_lines)]
-
-    for ti, td in enumerate(state.midi.tracks):
-        events = []
-        for n in td.notes:
-            sb = n.start_tick / tpq
-            eb = n.end_tick / tpq
-            sl = int(round(sb * lpq))
-            el = int(round(eb * lpq))
-            if el <= sl:
-                el = sl + 1
-            events.append((sl, el, n.pitch, n.velocity))
-
-        events.sort(key=lambda e: (e[0], e[2]))
-
-        off_lines = {}
-        for sl, el, pitch, vel in events:
-            if 0 <= sl < total_lines:
-                grid[sl][ti] = ("NOTE", pitch, vel)
-            off_line = min(el, total_lines - 1)
-            if off_line > sl:
-                off_lines[off_line] = True
-
-        for line in off_lines:
-            if 0 <= line < total_lines and grid[line][ti] is None:
-                grid[line][ti] = ("OFF",)
-
-    track_names = []
-    for i, td in enumerate(state.midi.tracks):
-        name = td.name if td.name else f"Channel {i + 1}"
-        if len(name) > 12:
-            name = name[:11] + "."
-        track_names.append(name)
-
-    return grid, total_lines, num_tracks, track_names
+    return f"{letter}{acc}{max(0, min(9, octave))}"
 
 
 def draw_tracker_view(state):
@@ -105,48 +57,80 @@ def draw_tracker_view(state):
     canvas_pos = imgui.get_cursor_screen_pos()
     x0, y0 = canvas_pos
 
-    char_w = imgui.calc_text_size("W")[0]
+    char_w = imgui.calc_text_size("0")[0]
+    dot_w = imgui.calc_text_size("·")[0]
+    dot_pad = (char_w - dot_w) * 0.5
     row_h = imgui.get_text_line_height_with_spacing() + 1
 
-    row_num_chars = 4
-    row_num_w = char_w * row_num_chars + 8
-
-    cell_chars = 11
-    cell_w = char_w * cell_chars + 2
+    row_num_w = round(char_w * 4) + 8
+    cell_w = round(char_w * 9) + 2
     divider_w = 1
 
-    grid, total_lines, num_tracks, track_names = _build_tracker_grid(state)
+    groups, total_lines = build_track_grids(state, cfg)
 
-    if num_tracks == 0:
-        imgui.text("No MIDI data loaded.")
+    if not groups:
+        msg = "No MIDI loaded."
+        msg_sz = imgui.calc_text_size(msg)
+        cx = imgui.get_cursor_pos_x() + (avail_w - msg_sz.x) * 0.5
+        cy = imgui.get_cursor_pos_y() + (avail_h - msg_sz.y) * 0.5
+        imgui.set_cursor_pos((cx, cy))
+        imgui.text_colored(msg, 1, 1, 1, 0.4)
         if font_mono is not None:
             imgui.pop_font()
         return
 
-    header_h = row_h + 4
-    content_w = row_num_w + num_tracks * (cell_w + divider_w)
+    total_channels = sum(num_ch for _, _, _, num_ch in groups)
+    content_w = row_num_w + total_channels * (cell_w + divider_w)
+    full_w = max(avail_w, content_w)
 
     dl = imgui.get_window_draw_list()
 
-    # Header
-    dl.add_rect_filled(x0, y0, x0 + max(avail_w, content_w), y0 + header_h, _COL_HEADER_BG)
-    dl.add_text(x0 + 4, y0 + 2, _COL_HEADER_TEXT, "++")
+    # --- Track name header row ---
+    track_hdr_h = row_h + 2
+    dl.add_rect_filled(x0, y0, x0 + full_w, y0 + track_hdr_h, _COL_HEADER_BG)
 
-    for ci in range(num_tracks):
-        cx = x0 + row_num_w + ci * (cell_w + divider_w)
-        ci_muted = state.midi.tracks[ci].muted if ci < len(state.midi.tracks) else False
-        text_col = imgui.get_color_u32_rgba(1, 1, 1, 0.3 if ci_muted else 0.9)
-        dl.add_text(cx + 2, y0 + 2, text_col, track_names[ci])
-        dl.add_line(cx, y0, cx, y0 + header_h, _COL_DIVIDER)
+    _COL_TRACK_DIV = imgui.get_color_u32_rgba(1, 1, 1, 0.25)
+    ch_offset = 0
+    for ti, name, grid, num_ch in groups:
+        gx = x0 + row_num_w + ch_offset * (cell_w + divider_w)
+        gw = num_ch * (cell_w + divider_w)
 
-    dl.add_line(x0, y0 + header_h, x0 + max(avail_w, content_w), y0 + header_h, _COL_DIVIDER)
+        label = f"Track {ti + 1}"
+        label_sz = imgui.calc_text_size(label)
+        lx = gx + (gw - label_sz.x) * 0.5
+        dl.add_text(max(gx + 2, lx), y0 + 1, _COL_HEADER_TEXT, label)
 
-    # Body area (no scrolling)
+        dl.add_line(gx, y0, gx, y0 + track_hdr_h, _COL_TRACK_DIV)
+        ch_offset += num_ch
+
+    last_x = x0 + row_num_w + total_channels * (cell_w + divider_w)
+    dl.add_line(last_x, y0, last_x, y0 + track_hdr_h, _COL_TRACK_DIV)
+    dl.add_line(x0, y0 + track_hdr_h, x0 + full_w, y0 + track_hdr_h, _COL_DIVIDER)
+
+    # --- Channel number header row ---
+    chan_y = y0 + track_hdr_h
+    chan_hdr_h = row_h + 2
+    dl.add_rect_filled(x0, chan_y, x0 + full_w, chan_y + chan_hdr_h, _COL_HEADER_BG)
+    dl.add_text(x0 + 4, chan_y + 1, _COL_HEADER_TEXT, "++")
+
+    ch_offset = 0
+    _COL_CHAN_TEXT = imgui.get_color_u32_rgba(1, 1, 1, 0.6)
+    for ti, name, grid, num_ch in groups:
+        for ch in range(num_ch):
+            cx = x0 + row_num_w + (ch_offset + ch) * (cell_w + divider_w)
+            dl.add_text(cx + 2, chan_y + 1, _COL_CHAN_TEXT, f"Ch {ch + 1}")
+            dl.add_line(cx, chan_y, cx, chan_y + chan_hdr_h, _COL_DIVIDER)
+        ch_offset += num_ch
+
+    dl.add_line(last_x, chan_y, last_x, chan_y + chan_hdr_h, _COL_DIVIDER)
+    dl.add_line(x0, chan_y + chan_hdr_h, x0 + full_w, chan_y + chan_hdr_h, _COL_DIVIDER)
+
+    # --- Body ---
+    header_h = track_hdr_h + chan_hdr_h
     body_y = y0 + header_h
     body_h = max(100.0, avail_h - header_h)
     visible_rows = max(1, int(body_h / row_h))
 
-    # Determine center line
     playhead_line = -1
     if state.playing or state.playhead_beats > 0:
         playhead_line = int(state.playhead_beats * lpq)
@@ -154,9 +138,8 @@ def draw_tracker_view(state):
     if state.playing and state.tracking_enabled:
         state.tracker_view_line = playhead_line
 
-    # Handle mouse wheel scrolling when hovered
     imgui.set_cursor_screen_position((x0, body_y))
-    imgui.invisible_button("##tracker_body", max(avail_w, content_w), body_h)
+    imgui.invisible_button("##tracker_body", full_w, body_h)
     if imgui.is_item_hovered():
         io = imgui.get_io()
         scroll_delta = int(io.mouse_wheel)
@@ -165,11 +148,17 @@ def draw_tracker_view(state):
 
     state.tracker_view_line = max(0, min(total_lines - 1, state.tracker_view_line))
 
-    # Compute which rows to draw: center_line is at the middle of the view
     center_slot = visible_rows // 2
     first_row = state.tracker_view_line - center_slot
 
-    _muted_flags = [state.midi.tracks[ci].muted if ci < len(state.midi.tracks) else False for ci in range(num_tracks)]
+    # Build flat channel list for row rendering
+    flat_channels = []
+    for ti, name, grid, num_ch in groups:
+        td = state.midi.tracks[ti] if ti < len(state.midi.tracks) else None
+        muted = td.muted if td else False
+        for ch in range(num_ch):
+            flat_channels.append((grid, ch, muted, td))
+
     _COL_NOTE_DIM = imgui.get_color_u32_rgba(1.0, 1.0, 1.0, 0.25)
     _COL_NOTE_OFF_DIM = imgui.get_color_u32_rgba(1.0, 0.3, 0.3, 0.25)
     _COL_INST_DIM = imgui.get_color_u32_rgba(0.4, 0.4, 1.0, 0.25)
@@ -185,69 +174,66 @@ def draw_tracker_view(state):
 
         if ry + row_h < body_y or ry > body_y + body_h:
             continue
-
         if row < 0 or row >= total_lines:
             continue
 
-        # Row background
         if row == playhead_line:
-            dl.add_rect_filled(x0, ry, x0 + max(avail_w, content_w), ry + row_h, _COL_PLAYHEAD)
+            dl.add_rect_filled(x0, ry, x0 + full_w, ry + row_h, _COL_PLAYHEAD)
         elif row % highlight_interval == 0:
-            dl.add_rect_filled(x0, ry, x0 + max(avail_w, content_w), ry + row_h, _COL_ROW_HIGHLIGHT)
+            dl.add_rect_filled(x0, ry, x0 + full_w, ry + row_h, _COL_ROW_HIGHLIGHT)
         elif row % lpq == 0:
-            dl.add_rect_filled(x0, ry, x0 + max(avail_w, content_w), ry + row_h, _COL_ROW_ALT)
+            dl.add_rect_filled(x0, ry, x0 + full_w, ry + row_h, _COL_ROW_ALT)
 
-        # Row number
-        row_str = f"{row:02X}"
-        dl.add_text(x0 + 4, ry, _COL_ROW_NUM, row_str)
+        dl.add_text(x0 + 4, ry, _COL_ROW_NUM, f"{row:02X}")
 
-        # Cells
-        for ci in range(num_tracks):
+        for ci, (grid, ch, muted, td) in enumerate(flat_channels):
             cell_x = x0 + row_num_w + ci * (cell_w + divider_w)
             dl.add_line(cell_x, ry, cell_x, ry + row_h, _COL_DIVIDER)
 
-            ci_muted = _muted_flags[ci]
-            col_empty = _COL_EMPTY_DIM if ci_muted else _COL_EMPTY
-            col_note = _COL_NOTE_DIM if ci_muted else _COL_NOTE
-            col_off = _COL_NOTE_OFF_DIM if ci_muted else _COL_NOTE_OFF
-            col_inst = _COL_INST_DIM if ci_muted else _COL_INST
-            col_vol = _COL_VOL_DIM if ci_muted else _COL_VOL
+            col_empty = _COL_EMPTY_DIM if muted else _COL_EMPTY
+            col_note = _COL_NOTE_DIM if muted else _COL_NOTE
+            col_off = _COL_NOTE_OFF_DIM if muted else _COL_NOTE_OFF
+            col_inst = _COL_INST_DIM if muted else _COL_INST
+            col_vol = _COL_VOL_DIM if muted else _COL_VOL
 
-            cell = grid[row][ci]
+            cell = grid[row][ch]
             tx = cell_x + 1
 
+            def _dots(x, y, n, col):
+                for k in range(n):
+                    dl.add_text(round(x + k * char_w + dot_pad), y, col, "·")
+
             if cell is None:
-                dl.add_text(tx, ry, col_empty, "...........")
+                _dots(tx, ry, 9, col_empty)
             elif cell[0] == "NOTE":
                 _, pitch, vel = cell
                 note_str = _midi_note_str(pitch, cfg.transpose_octaves)
-                dl.add_text(tx, ry, col_note, note_str)
+                define_inst, inst_hex, vel_enabled, vel_max_hex = _resolve_track_settings(cfg, td)
 
-                inst_x = tx + char_w * 3
-                if cfg.define_instrument:
-                    dl.add_text(inst_x, ry, col_inst, cfg.instrument_hex.upper())
+                x1 = tx
+                x2 = round(tx + char_w * 3)
+                x3 = round(tx + char_w * 5)
+                x4 = round(tx + char_w * 7)
+
+                dl.add_text(x1, ry, col_note, note_str)
+                if define_inst:
+                    dl.add_text(x2, ry, col_inst, inst_hex.upper())
                 else:
-                    dl.add_text(inst_x, ry, col_empty, "..")
-
-                vol_x = inst_x + char_w * 2
-                if cfg.velocity_enabled:
-                    vmax = int(cfg.velocity_max_hex or "FF", 16) & 0xFF
+                    _dots(x2, ry, 2, col_empty)
+                if vel_enabled:
+                    vmax = int(vel_max_hex or "FF", 16) & 0xFF
                     v = round(max(0, min(127, vel)) / 127.0 * vmax)
-                    dl.add_text(vol_x, ry, col_vol, f"{v:02X}")
+                    dl.add_text(x3, ry, col_vol, f"{v:02X}")
                 else:
-                    dl.add_text(vol_x, ry, col_empty, "..")
-
-                eff_x = vol_x + char_w * 2
-                dl.add_text(eff_x, ry, col_empty, "....")
+                    _dots(x3, ry, 2, col_empty)
+                _dots(x4, ry, 2, col_empty)
 
             elif cell[0] == "OFF":
                 tag = cfg.note_off_mode if cfg.note_off_mode in ("OFF", "REL") else "OFF"
                 dl.add_text(tx, ry, col_off, tag)
-                dl.add_text(tx + char_w * 3, ry, col_empty, "........")
+                _dots(round(tx + char_w * 3), ry, 6, col_empty)
 
-    # Right edge divider
-    last_div_x = x0 + row_num_w + num_tracks * (cell_w + divider_w)
-    dl.add_line(last_div_x, body_y, last_div_x, body_y + body_h, _COL_DIVIDER)
+    dl.add_line(last_x, body_y, last_x, body_y + body_h, _COL_DIVIDER)
 
     if font_mono is not None:
         imgui.pop_font()

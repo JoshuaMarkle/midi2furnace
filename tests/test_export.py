@@ -25,6 +25,7 @@ class _State:
     def __init__(self):
         self.midi = MidiDoc()
         self.selected_notes = set()
+        self.focused_track = None
 
 
 def _make_state(*notes):
@@ -59,24 +60,21 @@ def test_midi_to_name_oct_sharp():
 
 
 def test_vol_hex_disabled():
-    cfg = FurnaceConfig(velocity_enabled=False)
-    assert _vol_hex(100, cfg) == ".."
+    assert _vol_hex(100, False, "FF") == "··"
 
 
 def test_vol_hex_max():
-    cfg = FurnaceConfig(velocity_enabled=True, velocity_max_hex="FF")
-    assert _vol_hex(127, cfg) == "FF"
+    assert _vol_hex(127, True, "FF") == "FF"
 
 
 def test_vol_hex_zero():
-    cfg = FurnaceConfig(velocity_enabled=True, velocity_max_hex="FF")
-    assert _vol_hex(0, cfg) == "00"
+    assert _vol_hex(0, True, "FF") == "00"
 
 
 def test_note_on_cell_length():
     cfg = FurnaceConfig()
     cell = _note_on_cell(60, 100, cfg)
-    assert len(cell) == 11
+    assert len(cell) == 9
 
 
 def test_note_on_cell_with_instrument():
@@ -88,17 +86,17 @@ def test_note_on_cell_with_instrument():
 def test_note_on_cell_no_instrument():
     cfg = FurnaceConfig(define_instrument=False)
     cell = _note_on_cell(60, 100, cfg)
-    assert cell[3:5] == ".."
+    assert cell[3:5] == "··"
 
 
 def test_off_cell():
     cfg = FurnaceConfig(note_off_mode="REL")
     cell = _off_cell(cfg)
-    assert cell.startswith("REL") and len(cell) == 11
+    assert cell.startswith("REL") and len(cell) == 9
 
 
 def test_blank_cell_length():
-    assert len(_blank_cell()) == 11
+    assert len(_blank_cell()) == 9
 
 
 # ---------- build_furnace_clipboard_text ----------
@@ -143,11 +141,12 @@ def test_two_tracks_two_channels():
     td2.notes = [Note(0, 480, 64, 100, 0)]
     state.midi.tracks = [td1, td2]
     state.midi.ticks_per_beat = 480
+    state.midi.total_ticks = 480
     cfg = FurnaceConfig(polyphony_mode="per_track")
     ok, text = build_furnace_clipboard_text(state, cfg)
     assert ok
     first_row = text.split("\n")[2]
-    # two cells separated by |
+    # per_track = 1 channel per track, so 2 cells
     assert first_row.count("|") == 2
 
 
@@ -156,9 +155,11 @@ def test_spillover_single_track():
     cfg = FurnaceConfig(polyphony_mode="spillover", spillover_count=2, lines_per_quarter=4)
     ok, text = build_furnace_clipboard_text(state, cfg)
     assert ok
+    first_row = text.split("\n")[2]
+    assert first_row.count("|") == 2
 
 
-def test_spillover_multi_track_error():
+def test_spillover_multi_track():
     state = _State()
     td1 = TrackData("t1")
     td1.notes = [Note(0, 480, 60, 100, 0)]
@@ -166,10 +167,13 @@ def test_spillover_multi_track_error():
     td2.notes = [Note(0, 480, 64, 100, 0)]
     state.midi.tracks = [td1, td2]
     state.midi.ticks_per_beat = 480
-    cfg = FurnaceConfig(polyphony_mode="spillover")
-    ok, msg = build_furnace_clipboard_text(state, cfg)
-    assert not ok
-    assert "single track" in msg.lower() or "spillover" in msg.lower()
+    state.midi.total_ticks = 480
+    cfg = FurnaceConfig(polyphony_mode="spillover", spillover_count=2, auto_spillover=False)
+    ok, text = build_furnace_clipboard_text(state, cfg)
+    assert ok
+    first_row = text.split("\n")[2]
+    # 2 tracks x 2 spillover channels = 4 cells
+    assert first_row.count("|") == 4
 
 
 # ---------- file export ----------

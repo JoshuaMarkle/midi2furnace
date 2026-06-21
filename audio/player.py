@@ -96,10 +96,12 @@ def update_playback(state):
         td_ev = state.midi.tracks[e["track_idx"]]
         if td_ev.muted or (any_starred and not td_ev.starred):
             continue
+        if getattr(state, "master_muted", False):
+            continue
         p = e["pitch"]
         dur_ms = max(30, int((e["end_us"] - e["start_us"]) / 1000.0))
         freq = 440.0 * (2.0 ** ((p - 69) / 12.0))
-        gain = getattr(state, "master_gain", 0.5)
+        gain = getattr(state, "master_gain", 0.5) * getattr(td_ev, "volume", 1.0)
         ch = tone(freq, dur_ms).play()
         if ch:
             ch.set_volume(gain)

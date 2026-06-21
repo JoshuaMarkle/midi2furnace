@@ -13,210 +13,202 @@ def _midi_to_name_oct(note: int, transpose_octaves: int) -> Tuple[str, str, int]
     octave = n // 12 - 1
     return letter, accidental, octave
 
-def _vol_hex(vel: int, cfg: FurnaceConfig) -> str:
-    if not cfg.velocity_enabled:
-        return ".."
-    vmax = int(cfg.velocity_max_hex or "FF", 16) & 0xFF
+def _resolve_track_settings(cfg: FurnaceConfig, td=None):
+    """Return (define_instrument, instrument_hex, velocity_enabled, velocity_max_hex)
+    using per-track overrides if available, otherwise defaults from cfg."""
+    define_inst = cfg.define_instrument
+    inst_hex = cfg.instrument_hex
+    vel_enabled = cfg.velocity_enabled
+    vel_max_hex = cfg.velocity_max_hex
+    if td is not None:
+        if td.override_instrument:
+            define_inst = True
+            inst_hex = td.override_instrument_hex
+        if td.override_velocity:
+            vel_enabled = True
+            vel_max_hex = td.override_velocity_max_hex
+    return define_inst, inst_hex, vel_enabled, vel_max_hex
+
+def _vol_hex(vel: int, vel_enabled: bool, vel_max_hex: str) -> str:
+    if not vel_enabled:
+        return "··"
+    vmax = int(vel_max_hex or "FF", 16) & 0xFF
     v = max(0, min(127, int(vel)))
     out = round(v / 127.0 * vmax)
     return f"{out:02X}"
 
-def _note_on_cell(note: int, vel: int, cfg: FurnaceConfig) -> str:
+def _note_on_cell(note: int, vel: int, cfg: FurnaceConfig, td=None) -> str:
     L, acc, octv = _midi_to_name_oct(note, cfg.transpose_octaves)
-    if cfg.define_instrument:
-        inst = (cfg.instrument_hex or "00").upper().strip()
+    define_inst, inst_hex, vel_enabled, vel_max_hex = _resolve_track_settings(cfg, td)
+    if define_inst:
+        inst = (inst_hex or "00").upper().strip()
         if len(inst) != 2:
             try:
                 inst = f"{int(inst or '0', 16) & 0xFF:02X}"
             except Exception:
                 inst = "00"
     else:
-        inst = ".."  # <<< no instrument defined
-
-    vol = _vol_hex(vel, cfg)  # returns ".." when velocity mapping is off
-    return f"{L}{acc}{octv}{inst}{vol}...."   # 11 chars
+        inst = "··"
+    vol = _vol_hex(vel, vel_enabled, vel_max_hex)
+    return f"{L}{acc}{octv}{inst}{vol}··"
 
 def _off_cell(cfg: FurnaceConfig) -> str:
-    # OFF or REL + 8 dots
     tag = cfg.note_off_mode if cfg.note_off_mode in ("OFF", "REL") else "OFF"
-    return f"{tag}{'.'*8}"
+    return f"{tag}{'·'*6}"
 
 def _blank_cell() -> str:
-    return "..........."  # 11 dots
+    return "·········"
 
 def _quantize_beats_to_line(beat: float, lpq: int) -> int:
     return int(round(beat * lpq))
 
-def _gather_notes(state, cfg: FurnaceConfig):
-    """Return:
-       items: list[(ti, sl, el, pitch, vel)]
-       min_line, max_line: int (exclusive end)
-       used_tracks: sorted list of track indices used
-       by_track: dict[ti] -> list[(sl, el, pitch, vel)]
-    """
-    tpq = state.midi.ticks_per_beat or 480
-    lpq = max(1, int(cfg.lines_per_quarter))
-    items: List[Tuple[int,int,int,int,int]] = []
-    used: Set[int] = set()
-    by_track: Dict[int, List[Tuple[int,int,int,int]]] = {}
 
-    if state.selected_notes:
-        src = list(state.selected_notes)
-    else:
-        src = [(ti, ni) for ti, td in enumerate(state.midi.tracks) for ni, _ in enumerate(td.notes)]
+def get_visible_tracks(state):
+    """Track indices to display/export based on focused/starred state."""
+    if not state.midi.tracks:
+        return []
+    focused = state.focused_track
+    num = len(state.midi.tracks)
+    if focused is not None and 0 <= focused < num:
+        return [focused]
+    any_starred = any(td.starred for td in state.midi.tracks)
+    if any_starred:
+        return [i for i, td in enumerate(state.midi.tracks) if td.starred]
+    return list(range(num))
 
-    for (ti, ni) in src:
-        td = state.midi.tracks[ti]
-        n = td.notes[ni]
-        sb = n.start_tick / tpq
-        eb = n.end_tick  / tpq
-        sl = _quantize_beats_to_line(sb, lpq)
-        el = _quantize_beats_to_line(eb, lpq)
-        if el <= sl:
-            el = sl + 1  # ensure >= 1 line
-        items.append((ti, sl, el, n.pitch, n.velocity))
-        used.add(ti)
-        by_track.setdefault(ti, []).append((sl, el, n.pitch, n.velocity))
 
-    if not items:
-        return [], 0, 0, [], {}
-
-    min_l = min(sl for _, sl, _, _, _ in items)
-    max_l = max(el for _, _, el, _, _ in items)
-    return items, min_l, max_l, sorted(used), by_track
-
-def _max_concurrency(intervals: List[Tuple[int,int]]) -> int:
-    """Given (start,end) line intervals, return peak active overlap."""
-    events: List[Tuple[int,int]] = []
-    for sl, el in intervals:
-        events.append((sl, +1))
-        events.append((el, -1))
-    events.sort()
-    cur = 0
-    peak = 0
-    for _, d in events:
+def _max_concurrency(events):
+    """Given list of (start_line, end_line, ...) events, return peak active overlap."""
+    pts = []
+    for e in events:
+        pts.append((e[0], +1))
+        pts.append((e[1], -1))
+    pts.sort()
+    cur = peak = 0
+    for _, d in pts:
         cur += d
         peak = max(peak, cur)
     return peak
 
-def build_furnace_clipboard_text(state, cfg: FurnaceConfig) -> Tuple[bool, str]:
-    """Return (ok, text_or_error). On success, ok=True and text is the clipboard payload."""
+
+def build_track_grids(state, cfg: FurnaceConfig):
+    """Build per-track spillover grids for visible tracks.
+
+    Returns:
+        groups: list of (track_idx, track_name, grid, num_channels)
+            grid[row][ch] = None | ("NOTE", pitch, vel) | ("OFF",)
+        total_lines: int
+    """
     cfg.sanitize()
-    items, min_line, max_line, used_tracks, by_track = _gather_notes(state, cfg)
-    header = "org.tildearrow.furnace - Pattern Data (219)\n0\n"
+    track_indices = get_visible_tracks(state)
+    if not track_indices or not state.midi.tracks:
+        return [], 0
 
-    if not items:
-        return True, header  # nothing selected -> minimal header
+    tpq = state.midi.ticks_per_beat or 480
+    lpq = max(1, cfg.lines_per_quarter)
+    total_lines = max(1, int(math.ceil(state.midi.total_beats * lpq)))
 
-    total_lines = max(1, max_line - min_line)  # rows
-    lpq = max(1, int(cfg.lines_per_quarter))
+    is_spillover = cfg.polyphony_mode == "spillover"
 
-    if cfg.polyphony_mode == "spillover":
-        # Require single track selection
-        if len(used_tracks) > 1:
-            return False, ("Spillover export requires notes from a single track.\n"
-                           f"{len(used_tracks)} tracks detected in the selection.")
-        ti = used_tracks[0] if used_tracks else 0
-        track_items = by_track.get(ti, [])
-        # channels needed = concurrency (clamped to spillover_count)
-        intervals = [(sl, el) for (sl, el, _, _) in track_items]
-        need = max(1, _max_concurrency(intervals))
-        chans = max(1, min(int(cfg.spillover_count), need))
+    groups = []
+    for ti in track_indices:
+        td = state.midi.tracks[ti]
+        name = td.name if td.name else f"Track {ti + 1}"
 
-        # grid: rows x chans
-        grid: List[List[str]] = [[_blank_cell() for _ in range(chans)] for __ in range(total_lines)]
+        events = []
+        for n in td.notes:
+            sb = n.start_tick / tpq
+            eb = n.end_tick / tpq
+            sl = _quantize_beats_to_line(sb, lpq)
+            el = _quantize_beats_to_line(eb, lpq)
+            if el <= sl:
+                el = sl + 1
+            events.append((sl, el, n.pitch, n.velocity))
 
-        # spillover placement with stomp
-        chan_ends = [ -10**9 for _ in range(chans) ]   # end line per subchannel
-        off_events: Dict[int, List[int]] = {}          # line -> list[subch]
+        events.sort(key=lambda e: (e[0], e[2]))
 
-        # sort by (start, end, pitch) for stable placement
-        for (tix, sl, el, pitch, vel) in sorted(items, key=lambda x: (x[1], x[2], x[3])):
-            if tix != ti:
+        if not is_spillover:
+            chans = 1
+        elif td.override_spillover:
+            chans = max(1, td.override_spillover_count)
+        elif cfg.auto_spillover:
+            chans = max(1, _max_concurrency(events))
+        else:
+            chans = max(1, cfg.spillover_count)
+
+        grid: List[List] = [[None] * chans for _ in range(total_lines)]
+        chan_ends = [-10**9] * chans
+        off_events: Dict[int, List[int]] = {}
+
+        for sl, el, pitch, vel in events:
+            if sl < 0 or sl >= total_lines:
                 continue
-            sl_rel = sl - min_line
-            el_rel = el - min_line
-            # find free subch
+
             free = None
             for j in range(chans):
-                if chan_ends[j] <= sl_rel:
+                if chan_ends[j] <= sl:
                     free = j
                     break
+
             if free is None:
-                # stomp oldest (smallest end)
                 j = min(range(chans), key=lambda k: chan_ends[k])
-                # emit OFF at sl_rel unless a note-on is here already
-                if grid[sl_rel][j] == _blank_cell():
-                    grid[sl_rel][j] = _off_cell(cfg)
-                chan_ends[j] = sl_rel
+                chan_ends[j] = sl
                 free = j
 
-            # place note-on
-            grid[sl_rel][free] = _note_on_cell(pitch, vel, cfg)
-            # schedule OFF at el_rel if no new note-on overwrites it
-            off_line = max(0, min(el_rel, total_lines - 1))
+            grid[sl][free] = ("NOTE", pitch, vel)
+            off_line = max(0, min(el, total_lines - 1))
             off_events.setdefault(off_line, []).append(free)
-            chan_ends[free] = el_rel  # keep true end for channel availability
+            chan_ends[free] = el
 
-        # emit OFFs
-        for line, subs in off_events.items():
-            for sub in subs:
-                if 0 <= line < total_lines and grid[line][sub] == _blank_cell():
-                    grid[line][sub] = _off_cell(cfg)
+        for line, chs in off_events.items():
+            for ch in chs:
+                if 0 <= line < total_lines and grid[line][ch] is None:
+                    grid[line][ch] = ("OFF",)
 
-        # compose
-        bar = "|"
-        out_lines = ["".join(cell + bar for cell in row) for row in grid]
-        return True, header + "\n".join(out_lines)
+        groups.append((ti, name, grid, chans))
 
-    # ----- per_track (channel-per-track) -----
-    # Only include channels for tracks that actually have notes in this export
-    track_order = used_tracks  # already sorted
-    track_to_ch = {ti: idx for idx, ti in enumerate(track_order)}
-    chans = len(track_order)
+    return groups, total_lines
 
-    grid: List[List[str]] = [[_blank_cell() for _ in range(chans)] for __ in range(total_lines)]
 
-    # Count starts/ends per track, per line
-    from typing import Dict
-    starts_by_track: Dict[int, Dict[int, int]] = {ti: {} for ti in track_order}
-    ends_by_track:   Dict[int, Dict[int, int]] = {ti: {} for ti in track_order}
+def build_furnace_clipboard_text(state, cfg: FurnaceConfig) -> Tuple[bool, str]:
+    """Return (ok, text_or_error). On success, ok=True and text is the clipboard payload."""
+    groups, total_lines = build_track_grids(state, cfg)
+    header = "org.tildearrow.furnace - Pattern Data (219)\n0\n"
 
-    # Place note-ons and record start/end counts
-    for (ti, sl, el, pitch, vel) in sorted(items, key=lambda x: (x[0], x[1], x[2], x[3])):
-        if ti not in track_to_ch:
-            continue
-        ch = track_to_ch[ti]
-        sl_rel = sl - min_line
-        el_rel = el - min_line
-        # place note-on (latest wins if multiple at same line)
-        grid[sl_rel][ch] = _note_on_cell(pitch, vel, cfg)
-        # record start
-        starts_by_track[ti][sl_rel] = starts_by_track[ti].get(sl_rel, 0) + 1
-        # clamp OFF line to last row (so boundary notes still get an OFF)
-        off_line = max(0, min(el_rel, total_lines - 1))
-        ends_by_track[ti][off_line] = ends_by_track[ti].get(off_line, 0) + 1
+    if not groups:
+        return True, header
 
-    # Emit OFF/REL when the last overlap ends and no new start occurs on that line
-    for ti in track_order:
-        ch = track_to_ch[ti]
-        cur = 0  # active overlapping notes on this track
-        for line in range(total_lines):
-            s = starts_by_track[ti].get(line, 0)
-            e = ends_by_track[ti].get(line, 0)
-            cur += s
-            cur_after = cur - e
-            # If everything ended on this line AND nothing starts on this line,
-            # we need an OFF/REL (unless a note-on already occupies the cell).
-            if e > 0 and cur_after == 0 and s == 0:
-                if grid[line][ch] == _blank_cell():
-                    grid[line][ch] = _off_cell(cfg)
-            cur = cur_after
+    # Find content range (trim empty leading/trailing rows)
+    min_row = total_lines
+    max_row = -1
+    for _, _, grid, num_ch in groups:
+        for row in range(total_lines):
+            for ch in range(num_ch):
+                if grid[row][ch] is not None:
+                    min_row = min(min_row, row)
+                    max_row = max(max_row, row)
+                    break
 
-    # compose
-    bar = "|"
-    out_lines = ["".join(cell + bar for cell in row) for row in grid]
+    if max_row < 0:
+        return True, header
+
+    out_lines = []
+    for row in range(min_row, max_row + 1):
+        cells = []
+        for ti, _, grid, num_ch in groups:
+            td = state.midi.tracks[ti]
+            for ch in range(num_ch):
+                cell = grid[row][ch]
+                if cell is None:
+                    cells.append(_blank_cell())
+                elif cell[0] == "NOTE":
+                    cells.append(_note_on_cell(cell[1], cell[2], cfg, td))
+                elif cell[0] == "OFF":
+                    cells.append(_off_cell(cfg))
+        out_lines.append("".join(c + "|" for c in cells))
+
     return True, header + "\n".join(out_lines)
+
 
 def copy_selection_to_clipboard(state, cfg: FurnaceConfig) -> Tuple[bool, str]:
     """(ok, message). On success, message='Copied'. On error, message explains why."""
@@ -225,7 +217,6 @@ def copy_selection_to_clipboard(state, cfg: FurnaceConfig) -> Tuple[bool, str]:
         return False, text_or_error
 
     text = text_or_error
-    # xclip is reliable on X11 (Arch/i3/X11 setup)
     try:
         import subprocess
         proc = subprocess.run(
@@ -237,14 +228,12 @@ def copy_selection_to_clipboard(state, cfg: FurnaceConfig) -> Tuple[bool, str]:
             return True, "Copied"
     except Exception:
         pass
-    # pyperclip (uses xclip/xsel/wl-clipboard under the hood)
     try:
         import pyperclip
         pyperclip.copy(text)
         return True, "Copied"
     except Exception:
         pass
-    # Last resort: Tk
     try:
         import tkinter as tk
         r = tk.Tk(); r.withdraw()

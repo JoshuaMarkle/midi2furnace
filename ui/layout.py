@@ -4,7 +4,6 @@ from ui.panels import draw_playback_bar, draw_midi_info
 from ui.tracker_panel import draw_tracker_settings_content, draw_furnace_preview
 from ui.timeline import draw_timeline_canvas
 from ui.tracker_view import draw_tracker_view
-from ui.icons import ICON_MUSIC, ICON_EYE, ICON_SLIDERS
 
 _NO_DECOR = (
     imgui.WINDOW_NO_MOVE
@@ -21,6 +20,31 @@ _NO_DECOR_TITLED = (
 
 _SPLITTER_W = 4.0
 _SPLITTER_H = 4.0
+
+
+def draw_dim_overlay(state):
+    if not (state.show_settings or state.show_tips):
+        return
+    w, h = state.window_size
+    imgui.push_style_color(imgui.COLOR_WINDOW_BACKGROUND, 0, 0, 0, 0.4)
+    imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (0, 0))
+    imgui.set_next_window_position(0, 0)
+    imgui.set_next_window_size(w, h)
+    try:
+        imgui.set_next_window_focus()
+    except Exception:
+        pass
+    imgui.begin(
+        "##dim_overlay",
+        flags=_NO_DECOR | imgui.WINDOW_NO_SCROLLBAR | imgui.WINDOW_NO_NAV,
+    )
+    imgui.invisible_button("##dim_click", w, h)
+    if imgui.is_item_clicked():
+        state.show_settings = False
+        state.show_tips = False
+    imgui.end()
+    imgui.pop_style_var()
+    imgui.pop_style_color()
 
 
 def draw_tiled_layout(state):
@@ -76,13 +100,13 @@ def draw_tiled_layout(state):
     )
     imgui.push_style_var(imgui.STYLE_FRAME_PADDING, (4, 2))
     if imgui.begin_tab_bar("##left_tabs"):
-        if imgui.begin_tab_item(ICON_MUSIC + " Piano Roll")[0]:
+        if imgui.begin_tab_item("Piano Roll")[0]:
             draw_timeline_canvas(state)
             imgui.end_tab_item()
-        if imgui.begin_tab_item(ICON_SLIDERS + " Tracker")[0]:
+        if imgui.begin_tab_item("Tracker")[0]:
             draw_tracker_view(state)
             imgui.end_tab_item()
-        if imgui.begin_tab_item(ICON_EYE + " Preview")[0]:
+        if imgui.begin_tab_item("Preview")[0]:
             draw_furnace_preview(state)
             imgui.end_tab_item()
         imgui.end_tab_bar()

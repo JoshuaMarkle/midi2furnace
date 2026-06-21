@@ -18,19 +18,16 @@ def draw_tracker_settings_content(state):
     changed, tr = imgui.slider_int("Transpose (octaves)", cfg.transpose_octaves, -6, 6)
     if changed: cfg.transpose_octaves = tr
 
-    # Instrument / Velocity
+    # Default Instrument / Velocity
     imgui.separator()
 
-    # Define Instrument toggle with +/- bumpers
-    changed, definst = imgui.checkbox("Define Instrument", cfg.define_instrument)
+    changed, definst = imgui.checkbox("Default Instrument", cfg.define_instrument)
     if changed:
         cfg.define_instrument = definst
 
-    # Put +/- on the same line
     imgui.same_line()
-    _btn = getattr(imgui, "small_button", imgui.button)  # fallback if small_button missing
+    _btn = getattr(imgui, "small_button", imgui.button)
 
-    # Dim and disable when Define Instrument is off
     _dimmed = False
     if not cfg.define_instrument:
         try:
@@ -63,7 +60,6 @@ def draw_tracker_settings_content(state):
     if _dimmed:
         imgui.pop_style_var()
 
-    # Instrument (hex) — dim and read-only if Define Instrument is off
     readonly_flag = getattr(imgui, "INPUT_TEXT_READ_ONLY", 0)
     inst_flags = imgui.INPUT_TEXT_CHARS_UPPERCASE | (0 if cfg.define_instrument else readonly_flag)
 
@@ -83,12 +79,10 @@ def draw_tracker_settings_content(state):
     if _pushed:
         imgui.pop_style_var()
 
-    # Velocity mapping checkbox — correctly use (changed, value)
-    changed, v_on = imgui.checkbox("Velocity mapping", cfg.velocity_enabled)
+    changed, v_on = imgui.checkbox("Default Velocity", cfg.velocity_enabled)
     if changed:
         cfg.velocity_enabled = v_on
 
-    # Velocity max — dim + read-only when velocity mapping is off
     readonly_flag = getattr(imgui, "INPUT_TEXT_READ_ONLY", 0)
     vmax_flags = imgui.INPUT_TEXT_CHARS_UPPERCASE | (0 if cfg.velocity_enabled else readonly_flag)
 
@@ -127,11 +121,10 @@ def draw_tracker_settings_content(state):
     if imgui.radio_button("Spillover", p2):
         cfg.polyphony_mode = "spillover"
 
-    # --- Compatibility-friendly "disabled" UI for spillover count ---
-    disabled = (cfg.polyphony_mode != "spillover")
+    spill_disabled = (cfg.polyphony_mode != "spillover")
 
     _pushed = False
-    if disabled:
+    if spill_disabled:
         try:
             style = imgui.get_style()
             imgui.push_style_var(imgui.STYLE_ALPHA, style.alpha * 0.5)
@@ -139,8 +132,26 @@ def draw_tracker_settings_content(state):
         except Exception:
             pass
 
-    changed, c = imgui.slider_int("Spillover count", cfg.spillover_count, 1, 16)
-    if not disabled and changed:
+    changed, auto = imgui.checkbox("Auto spillover", cfg.auto_spillover)
+    if not spill_disabled and changed:
+        cfg.auto_spillover = auto
+
+    if _pushed:
+        imgui.pop_style_var()
+
+    slider_disabled = spill_disabled or cfg.auto_spillover
+
+    _pushed = False
+    if slider_disabled:
+        try:
+            style = imgui.get_style()
+            imgui.push_style_var(imgui.STYLE_ALPHA, style.alpha * 0.5)
+            _pushed = True
+        except Exception:
+            pass
+
+    changed, c = imgui.slider_int("Spillover count", cfg.spillover_count, 1, 64)
+    if not slider_disabled and changed:
         cfg.spillover_count = c
 
     if _pushed:

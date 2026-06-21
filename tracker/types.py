@@ -10,8 +10,9 @@ class FurnaceConfig:
     velocity_enabled: bool = False
     velocity_max_hex: str = "FF"
     note_off_mode: str = "REL"
-    polyphony_mode: str = "per_track"
-    spillover_count: int = 3
+    polyphony_mode: str = "spillover"
+    spillover_count: int = 16
+    auto_spillover: bool = True
 
     def sanitize(self):
         self.instrument_hex = f"{int(self.instrument_hex or '0', 16) & 0xFF:02X}"
@@ -21,4 +22,4 @@ class FurnaceConfig:
             self.note_off_mode = "REL"
         if self.polyphony_mode not in ("per_track", "spillover"):
             self.polyphony_mode = "per_track"
-        self.spillover_count = max(1, min(16, int(self.spillover_count)))
+        self.spillover_count = max(1, min(64, int(self.spillover_count)))

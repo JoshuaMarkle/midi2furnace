@@ -43,15 +43,17 @@ ICON_PLUS = ""
 ICON_MINUS = ""
 ICON_BACK = ""
 ICON_STAR = ""
+ICON_INSTRUMENT = ""
 ICON_INFO_CIRCLE = ""
 ICON_CROSSHAIRS = ""
 
 
 font_mono = None
+font_icon_sm = None
 _keep_alive = []
 
 def load_fonts(io, scale=1.0):
-    global font_mono
+    global font_mono, font_icon_sm
     _keep_alive.clear()
 
     io.fonts.clear()
@@ -69,3 +71,9 @@ def load_fonts(io, scale=1.0):
     )
 
     font_mono = io.fonts.add_font_from_file_ttf(FONT_MONO, 14 * scale)
+
+    glyph_ranges_sm = imgui.core.GlyphRanges([ICON_RANGE_MIN, ICON_RANGE_MAX, 0])
+    _keep_alive.append(glyph_ranges_sm)
+    font_icon_sm = io.fonts.add_font_from_file_ttf(
+        FONT_FA_SOLID, 11 * scale, glyph_ranges=glyph_ranges_sm,
+    )

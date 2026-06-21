@@ -20,7 +20,7 @@ from typing import List, Tuple, Optional
 from input.shortcuts import handle_shortcuts, handle_global_keys
 from input.nav import handle_navigation_keys
 from ui.menu import draw_menu_bar
-from ui.layout import draw_tiled_layout
+from ui.layout import draw_tiled_layout, draw_dim_overlay
 from ui.panels import draw_tips_window
 from ui.settings import draw_settings_window
 from ui.icons import load_fonts
@@ -277,6 +277,7 @@ def main():
                 on_export_file=lambda: do_export_file(state),
             )
             draw_tiled_layout(state)
+            draw_dim_overlay(state)
             draw_tips_window(state)
             draw_settings_window(state)
 

@@ -45,7 +45,15 @@ class TrackData:
         self.note_height: int = 10
         self.muted: bool = False
         self.starred: bool = False
+        self.volume: float = 1.0
         self.instrument: str = "Square"
+        # Export overrides (None = use default from FurnaceConfig)
+        self.override_instrument: bool = False
+        self.override_instrument_hex: str = "00"
+        self.override_velocity: bool = False
+        self.override_velocity_max_hex: str = "FF"
+        self.override_spillover: bool = False
+        self.override_spillover_count: int = 16
 
 
 class MidiDoc:

@@ -102,6 +102,10 @@ def draw_settings_window(state):
         (w - win_w) * 0.5, (h - win_h) * 0.5, _FIRST_USE
     )
 
+    try:
+        imgui.set_next_window_focus()
+    except Exception:
+        pass
     expanded, opened = imgui.begin("Settings", True)
     if not opened:
         state.show_settings = False
@@ -125,7 +129,7 @@ def draw_settings_window(state):
 def _draw_general_tab(state):
     imgui.spacing()
     imgui.text("UI Scale")
-    changed, val = imgui.slider_float("##ui_scale", state.ui_scale, 0.75, 3.0, "%.2f")
+    changed, val = imgui.slider_float("##ui_scale", state.ui_scale, 1.0, 3.0, "%.2f")
     if changed:
         state.ui_scale = val
         state.request_font_rebuild = True

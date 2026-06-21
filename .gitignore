@@ -26,4 +26,5 @@ Thumbs.db
 *.log
 
 # Misc
+Makefile
 CLAUDE.md
