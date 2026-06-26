@@ -62,11 +62,12 @@ def draw_tracker_view(state):
     dot_pad = (char_w - dot_w) * 0.5
     row_h = imgui.get_text_line_height_with_spacing() + 1
 
-    row_num_w = round(char_w * 4) + 8
+    groups, total_lines = build_track_grids(state, cfg)
+
+    row_num_digits = max(4, len(str(max(1, total_lines - 1))))
+    row_num_w = round(char_w * row_num_digits) + 8
     cell_w = round(char_w * 9) + 2
     divider_w = 1
-
-    groups, total_lines = build_track_grids(state, cfg)
 
     if not groups:
         msg = "No MIDI loaded."
@@ -184,7 +185,7 @@ def draw_tracker_view(state):
         elif row % lpq == 0:
             dl.add_rect_filled(x0, ry, x0 + full_w, ry + row_h, _COL_ROW_ALT)
 
-        dl.add_text(x0 + 4, ry, _COL_ROW_NUM, f"{row:02X}")
+        dl.add_text(x0 + 4, ry, _COL_ROW_NUM, f"{row:0{row_num_digits}d}")
 
         for ci, (grid, ch, muted, td) in enumerate(flat_channels):
             cell_x = x0 + row_num_w + ci * (cell_w + divider_w)

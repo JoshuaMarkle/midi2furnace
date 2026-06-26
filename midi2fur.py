@@ -81,9 +81,8 @@ def ask_open_midi() -> Optional[str]:
         return None
 
 
-def do_export_file(state: AppState):
+def _ask_save_path() -> Optional[str]:
     zenity = _zenity_path()
-    path = None
     if zenity:
         try:
             import subprocess
@@ -95,22 +94,27 @@ def do_export_file(state: AppState):
                 capture_output=True, text=True, timeout=120,
             )
             if result.returncode == 0 and result.stdout.strip():
-                path = result.stdout.strip()
+                return result.stdout.strip()
+            return None
         except Exception:
             pass
-    if not path:
-        try:
-            import tkinter as tk
-            from tkinter import filedialog
-            root = tk.Tk(); root.withdraw()
-            path = filedialog.asksaveasfilename(
-                title="Export Furnace Pattern Data",
-                defaultextension=".txt",
-                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
-            )
-            root.destroy()
-        except Exception:
-            pass
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk(); root.withdraw()
+        path = filedialog.asksaveasfilename(
+            title="Export Furnace Pattern Data",
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        root.destroy()
+        return path if path else None
+    except Exception:
+        return None
+
+
+def do_export_file(state: AppState):
+    path = _ask_save_path()
     if not path:
         return
     ok, msg = export_selection_to_file(state, state.tracker_cfg, path)
@@ -287,7 +291,8 @@ def main():
             handle_play_keys(io, state)  # SPACE to toggle play
             handle_global_keys(io, state)
             handle_shortcuts(io, state, on_open=lambda: do_open_file(state),
-                 on_copy=lambda: copy_selection_to_clipboard(state, state.tracker_cfg))
+                 on_copy=lambda: copy_selection_to_clipboard(state, state.tracker_cfg),
+                 on_export=lambda: do_export_file(state))
 
             if state.show_demo:
                 imgui.show_demo_window()

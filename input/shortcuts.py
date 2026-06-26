@@ -1,7 +1,7 @@
 import imgui
 from tracker.export import copy_selection_to_clipboard
 
-def handle_shortcuts(io, state, on_open, on_copy=None):
+def handle_shortcuts(io, state, on_open, on_copy=None, on_export=None):
     """Ctrl+O/Q/... cross-version, falls back to pygame if needed."""
     import pygame as _pg
 
@@ -33,10 +33,8 @@ def handle_shortcuts(io, state, on_open, on_copy=None):
         on_open()
     if _pressed("Q"):
         state.should_quit = True
-    if _pressed("S"):
-        print("[Action] Save")
-    if _pressed("N"):
-        print("[Action] New")
+    if _pressed("S") and on_export:
+        on_export()
     if _pressed("C"):
         ok, msg = copy_selection_to_clipboard(state, state.tracker_cfg)
         if not ok:

@@ -74,7 +74,7 @@ def test_vol_hex_zero():
 def test_note_on_cell_length():
     cfg = FurnaceConfig()
     cell = _note_on_cell(60, 100, cfg)
-    assert len(cell) == 9
+    assert len(cell) == 11
 
 
 def test_note_on_cell_with_instrument():
@@ -92,11 +92,11 @@ def test_note_on_cell_no_instrument():
 def test_off_cell():
     cfg = FurnaceConfig(note_off_mode="REL")
     cell = _off_cell(cfg)
-    assert cell.startswith("REL") and len(cell) == 9
+    assert cell.startswith("REL") and len(cell) == 11
 
 
 def test_blank_cell_length():
-    assert len(_blank_cell()) == 9
+    assert len(_blank_cell()) == 11
 
 
 # ---------- build_furnace_clipboard_text ----------

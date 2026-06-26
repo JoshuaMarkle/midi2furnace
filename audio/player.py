@@ -9,9 +9,11 @@ def selection_bounds_in_beats(state):
     tpq = state.midi.ticks_per_beat or 480
     lo = math.inf
     hi = 0.0
+    tracks = state.midi.tracks
     for (ti, ni) in state.selected_notes:
-        td = state.midi.tracks[ti]
-        n = td.notes[ni]
+        if ti >= len(tracks) or ni >= len(tracks[ti].notes):
+            continue
+        n = tracks[ti].notes[ni]
         lo = min(lo, n.start_tick / tpq)
         hi = max(hi, n.end_tick / tpq)
     return None if lo is math.inf else (lo, hi)
@@ -26,8 +28,11 @@ def build_schedule(state, start_b: float, end_b: float):
         src = [(ti, ni) for ti, td in enumerate(state.midi.tracks) for ni, _ in enumerate(td.notes)]
 
     b2us = state.midi.beat_to_us
+    tracks = state.midi.tracks
     for (ti, ni) in src:
-        td = state.midi.tracks[ti]
+        if ti >= len(tracks) or ni >= len(tracks[ti].notes):
+            continue
+        td = tracks[ti]
         n = td.notes[ni]
         sb = n.start_tick / tpq
         eb = n.end_tick  / tpq
@@ -89,11 +94,16 @@ def update_playback(state):
 
     idx = state.play_next_index
     ev = state.play_events
-    any_starred = any(td.starred for td in state.midi.tracks)
+    tracks = state.midi.tracks
+    n_tracks = len(tracks)
+    any_starred = any(td.starred for td in tracks)
     while idx < len(ev) and ev[idx]["start_us"] <= cur_us:
         e = ev[idx]
         idx += 1
-        td_ev = state.midi.tracks[e["track_idx"]]
+        ti_ev = e["track_idx"]
+        if ti_ev >= n_tracks:
+            continue
+        td_ev = tracks[ti_ev]
         if td_ev.muted or (any_starred and not td_ev.starred):
             continue
         if getattr(state, "master_muted", False):
@@ -102,7 +112,8 @@ def update_playback(state):
         dur_ms = max(30, int((e["end_us"] - e["start_us"]) / 1000.0))
         freq = 440.0 * (2.0 ** ((p - 69) / 12.0))
         gain = getattr(state, "master_gain", 0.5) * getattr(td_ev, "volume", 1.0)
-        ch = tone(freq, dur_ms).play()
+        waveform = getattr(td_ev, "instrument", "Square")
+        ch = tone(freq, dur_ms, waveform=waveform).play()
         if ch:
             ch.set_volume(gain)
     state.play_next_index = idx
@@ -110,7 +121,10 @@ def update_playback(state):
     active = set()
     for e in ev:
         if e["start_beats"] <= cur_beats < e["end_beats"]:
-            td_ev = state.midi.tracks[e["track_idx"]]
+            ti_ev = e["track_idx"]
+            if ti_ev >= n_tracks:
+                continue
+            td_ev = tracks[ti_ev]
             if not td_ev.muted and not (any_starred and not td_ev.starred):
                 active.add(e["pitch"])
     state.active_pitches = active

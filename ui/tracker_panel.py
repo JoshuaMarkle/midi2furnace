@@ -107,9 +107,25 @@ def draw_tracker_settings_content(state):
     imgui.text("Note-off")
     off_off  = (cfg.note_off_mode == "OFF")
     off_rel  = (cfg.note_off_mode == "REL")
-    if imgui.radio_button("REL", off_rel): cfg.note_off_mode = "REL"
+
+    _off_dimmed = cfg.suppress_note_off
+    if _off_dimmed:
+        try:
+            style = imgui.get_style()
+            imgui.push_style_var(imgui.STYLE_ALPHA, style.alpha * 0.4)
+        except Exception:
+            _off_dimmed = False
+    if imgui.radio_button("REL", off_rel) and not cfg.suppress_note_off:
+        cfg.note_off_mode = "REL"
     imgui.same_line()
-    if imgui.radio_button("OFF", off_off): cfg.note_off_mode = "OFF"
+    if imgui.radio_button("OFF", off_off) and not cfg.suppress_note_off:
+        cfg.note_off_mode = "OFF"
+    if _off_dimmed:
+        imgui.pop_style_var()
+
+    changed, suppress = imgui.checkbox("No note-off (pluck)", cfg.suppress_note_off)
+    if changed:
+        cfg.suppress_note_off = suppress
 
     # Polyphony
     imgui.separator()
@@ -155,6 +171,35 @@ def draw_tracker_settings_content(state):
         cfg.spillover_count = c
 
     if _pushed:
+        imgui.pop_style_var()
+
+    # Export range
+    imgui.separator()
+    changed, range_on = imgui.checkbox("Limit export range", cfg.export_range_enabled)
+    if changed:
+        cfg.export_range_enabled = range_on
+        if range_on and cfg.export_range_end_beat <= cfg.export_range_start_beat:
+            total_b = state.midi.total_beats if state.midi else 0.0
+            cfg.export_range_end_beat = max(1.0, total_b)
+
+    _range_dimmed = not cfg.export_range_enabled
+    if _range_dimmed:
+        try:
+            style = imgui.get_style()
+            imgui.push_style_var(imgui.STYLE_ALPHA, style.alpha * 0.4)
+        except Exception:
+            _range_dimmed = False
+
+    total_b = max(1.0, state.midi.total_beats if state.midi else 1.0)
+    changed, v = imgui.slider_float("Range start (beat)", cfg.export_range_start_beat, 0.0, total_b, "%.2f")
+    if cfg.export_range_enabled and changed:
+        cfg.export_range_start_beat = min(v, cfg.export_range_end_beat - 0.25)
+
+    changed, v = imgui.slider_float("Range end (beat)", cfg.export_range_end_beat, 0.0, total_b, "%.2f")
+    if cfg.export_range_enabled and changed:
+        cfg.export_range_end_beat = max(v, cfg.export_range_start_beat + 0.25)
+
+    if _range_dimmed:
         imgui.pop_style_var()
 
     imgui.separator()

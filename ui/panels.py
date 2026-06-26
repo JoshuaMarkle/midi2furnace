@@ -6,8 +6,9 @@ from ui.icons import (
     ICON_PLAY, ICON_STOP, ICON_CIRCLE_PLAY,
     ICON_CROSSHAIRS, ICON_VOLUME_UP, ICON_VOLUME_MUTE, ICON_COPY,
 )
+from audio.synth import WAVEFORMS
 
-_INSTRUMENTS = ["Square", "Triangle", "Sine"]
+_INSTRUMENTS = list(WAVEFORMS)
 
 
 def _brighten(c, factor=1.2):

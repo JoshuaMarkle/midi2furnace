@@ -31,7 +31,7 @@ def _resolve_track_settings(cfg: FurnaceConfig, td=None):
 
 def _vol_hex(vel: int, vel_enabled: bool, vel_max_hex: str) -> str:
     if not vel_enabled:
-        return "··"
+        return ".."
     vmax = int(vel_max_hex or "FF", 16) & 0xFF
     v = max(0, min(127, int(vel)))
     out = round(v / 127.0 * vmax)
@@ -48,16 +48,16 @@ def _note_on_cell(note: int, vel: int, cfg: FurnaceConfig, td=None) -> str:
             except Exception:
                 inst = "00"
     else:
-        inst = "··"
+        inst = ".."
     vol = _vol_hex(vel, vel_enabled, vel_max_hex)
-    return f"{L}{acc}{octv}{inst}{vol}··"
+    return f"{L}{acc}{octv}{inst}{vol}...."
 
 def _off_cell(cfg: FurnaceConfig) -> str:
     tag = cfg.note_off_mode if cfg.note_off_mode in ("OFF", "REL") else "OFF"
-    return f"{tag}{'·'*6}"
+    return f"{tag}{'.'*8}"
 
 def _blank_cell() -> str:
-    return "·········"
+    return "..........."
 
 def _quantize_beats_to_line(beat: float, lpq: int) -> int:
     return int(round(beat * lpq))
@@ -127,12 +127,18 @@ def build_track_grids(state, cfg: FurnaceConfig):
 
         events.sort(key=lambda e: (e[0], e[2]))
 
+        suppress_off = cfg.suppress_note_off
+
         if not is_spillover:
             chans = 1
         elif td.override_spillover:
             chans = max(1, td.override_spillover_count)
         elif cfg.auto_spillover:
-            chans = max(1, _max_concurrency(events))
+            if suppress_off:
+                concurrency_events = [(sl, sl + 1, p, v) for sl, el, p, v in events]
+            else:
+                concurrency_events = events
+            chans = max(1, _max_concurrency(concurrency_events))
         else:
             chans = max(1, cfg.spillover_count)
 
@@ -156,9 +162,12 @@ def build_track_grids(state, cfg: FurnaceConfig):
                 free = j
 
             grid[sl][free] = ("NOTE", pitch, vel)
-            off_line = max(0, min(el, total_lines - 1))
-            off_events.setdefault(off_line, []).append(free)
-            chan_ends[free] = el
+            if suppress_off:
+                chan_ends[free] = sl + 1
+            else:
+                off_line = max(0, min(el, total_lines - 1))
+                off_events.setdefault(off_line, []).append(free)
+                chan_ends[free] = el
 
         for line, chs in off_events.items():
             for ch in chs:
@@ -173,7 +182,7 @@ def build_track_grids(state, cfg: FurnaceConfig):
 def build_furnace_clipboard_text(state, cfg: FurnaceConfig) -> Tuple[bool, str]:
     """Return (ok, text_or_error). On success, ok=True and text is the clipboard payload."""
     groups, total_lines = build_track_grids(state, cfg)
-    header = "org.tildearrow.furnace - Pattern Data (219)\n0\n"
+    header = "org.tildearrow.furnace - Pattern Data (232)\n0\n"
 
     if not groups:
         return True, header
@@ -190,6 +199,16 @@ def build_furnace_clipboard_text(state, cfg: FurnaceConfig) -> Tuple[bool, str]:
                     break
 
     if max_row < 0:
+        return True, header
+
+    if cfg.export_range_enabled and cfg.export_range_end_beat > cfg.export_range_start_beat:
+        lpq = max(1, cfg.lines_per_quarter)
+        range_start_line = max(0, int(round(cfg.export_range_start_beat * lpq)))
+        range_end_line = max(0, int(round(cfg.export_range_end_beat * lpq)) - 1)
+        min_row = max(min_row, range_start_line)
+        max_row = min(max_row, range_end_line)
+
+    if max_row < min_row:
         return True, header
 
     out_lines = []
